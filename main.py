@@ -23,7 +23,7 @@ def _fetch_detail(driver, order_id):
   detail = data['order']['evoucher']['pins'][0]
   return detail
 
-def fetch_all_from_shopee(driver):
+def fetch_all_from_shopee(driver, ignore_set):
   page_size = 50 #maximum
   page_num = 1
   group_types = [22, 33]
@@ -33,34 +33,35 @@ def fetch_all_from_shopee(driver):
       driver.get(os.environ['GROUP_URL'].format(page_size, page_num, group_type))
       html = lxml.html.fromstring(driver.page_source)
       data = json.loads(html.text_content())['data']
-      # print('(', (page_num-1)*page_size, ' - ', page_num*page_size, ')', '/', data['total'])
       for item in data['list']:
-        detail = _fetch_detail(driver, item['order_id'])
-        if detail['is_returned'] == True:
+        if item['order_id'] in ignore_set:
           continue
+        detail = _fetch_detail(driver, item['order_id'])
         record = {
-          'Name' : item['item_name'],
-          'Img'  : [{ 'url': detail['url']}],
-          'Code' : detail['code'],
-          'Price' : item['final_price']/100000,
+          'Name'         : item['item_name'],
+          'Img'          : [{ 'url' : detail['url']}] if not detail['is_returned'] else None,
+          'Code'         : detail['code'],
+          'Price'        : item['final_price']/100000,
           'Created Date' : datetime.datetime.fromtimestamp(item['create_time']).date().isoformat(),
           'Expiry Date'  : datetime.datetime.strptime(item['evoucher']['pins'][0]['expiry_date'], '%Y%m%d').date().isoformat(),
-          'Order ID' : item['order_id'],
-          'Done' : detail['is_redeemed']
+          'Order ID'     : item['order_id'],
+          'Done'         : detail['is_redeemed'],
+          'Returned'     : detail['is_returned']
         }
-        # print('add', record['Order ID'], record['Name'])
-        # if detail.get('url', None) == None:
-          # print(record)
-
         records[record['Order ID']] = record
-
-      # print(count, len(data['list']));
       if count + len(data['list']) >= data['total'] :
         break
       else:
         count += len(data['list'])
         page_num += 1
 
+
+airtable = Airtable(os.environ['BASE_ID'], os.environ['TABLE_NAME'], os.environ['KEY'])
+table = airtable.get_all()
+
+used_set = set()
+used_set = set(record['fields']['Order ID'] for record in table
+  if record['fields'].get('Done', False) == True or record['fields'].get('Returned', False) == True)
 
 records = {}
 try:
@@ -98,38 +99,29 @@ try:
   )
   ActionChains(driver).move_to_element(button).click(button).perform()
 
-  fetch_all_from_shopee(driver)
-
+  fetch_all_from_shopee(driver, used_set)
 except Exception as e:
   logger.error('Failed to upload to ftp: '+ str(e))
 finally:
   driver.quit()
-# print(len(records), records.keys())
 
-
-airtable = Airtable(os.environ['BASE_ID'], os.environ['TABLE_NAME'], os.environ['KEY'])
-# print(airtable.get_all())
 
 updates = []
-for item in airtable.get_all():
+for item in table:
   dup_one = records.get(item['fields']['Order ID'], None)
   if dup_one:
-
     if dup_one['Expiry Date'] != item['fields']['Expiry Date'] or \
        dup_one['Done'] != item['fields'].get('Done', False) or \
+       dup_one['Returned'] != item['fields'].get('Returned', False) or \
        dup_one['Code'] != item['fields']['Code']:
       # dup_one is newer than airtable record
-      dup_one['id'] = item['id']
-      updates.append(dup_one)
-
+      updates.append({
+          'id'     : item['id'],
+          'fields' : dup_one
+        })
     del records[item['fields']['Order ID']]
 
 if len(records) > 0:
   airtable.batch_insert(list(records.values()))
 if len(updates) > 0:
-  airtable.batch_update(updates, False)
-
-
-
-
-
+  airtable.batch_update(updates, True)
