@@ -114,7 +114,8 @@ for item in table:
        dup_one['Done'] != item['fields'].get('Done', False) or \
        dup_one['Returned'] != item['fields'].get('Returned', False) or \
        dup_one['Code'] != item['fields']['Code']:
-      # dup_one is newer than airtable record
+      # dup_one is newer than airtable record, but the Saled field only maintained by myself
+      dup_one['Saled'] = item['fields'].get('Saled', False)
       updates.append({
           'id'     : item['id'],
           'fields' : dup_one
