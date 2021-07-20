@@ -13,6 +13,8 @@ from airtable import Airtable
 from dotenv import load_dotenv
 import datetime
 import time
+import json
+import traceback
 
 load_dotenv()
 
@@ -20,6 +22,7 @@ def _fetch_detail(driver, order_id):
   driver.get(os.environ['DETAIL_URL'].format(order_id))
   html = lxml.html.fromstring(driver.page_source)
   data = json.loads(html.text_content())['data']
+  # print(json.dumps(data, indent = 4))
   detail = data['order']['evoucher']['pins'][0]
   return detail
 
@@ -34,19 +37,21 @@ def fetch_all_from_shopee(driver, ignore_set):
       html = lxml.html.fromstring(driver.page_source)
       data = json.loads(html.text_content())['data']
       for item in data['list']:
+        # print(json.dumps(item, indent = 4))
         if item['order_id'] in ignore_set:
           continue
         detail = _fetch_detail(driver, item['order_id'])
         record = {
           'Name'         : item['item_name'],
-          'Img'          : [{ 'url' : detail['url']}] if not detail['is_returned'] else None,
+          'Img'          : [{ 'url' : detail['url']}] if not detail.get('is_returned', False) else None,
           'Code'         : detail['code'],
           'Price'        : item['final_price']/100000,
           'Created Date' : datetime.datetime.fromtimestamp(item['create_time']).date().isoformat(),
-          'Expiry Date'  : datetime.datetime.strptime(item['evoucher']['pins'][0]['expiry_date'], '%Y%m%d').date().isoformat(),
+          'Expiry Date'  : datetime.datetime.fromtimestamp(detail['expire_time']).date().isoformat(),
+          'Redeem Date'  : datetime.datetime.fromtimestamp(detail['redeem_time']).date().isoformat() if detail.get('is_redeemed', False) else None,
+          'Done'         : detail.get('is_redeemed', False),
+          'Returned'     : detail.get('is_returned', False),
           'Order ID'     : item['order_id'],
-          'Done'         : detail['is_redeemed'],
-          'Returned'     : detail['is_returned']
         }
         records[record['Order ID']] = record
       if count + len(data['list']) >= data['total'] :
@@ -100,8 +105,8 @@ try:
   ActionChains(driver).move_to_element(button).click(button).perform()
 
   fetch_all_from_shopee(driver, used_set)
-except Exception as e:
-  logger.error('Failed to upload to ftp: '+ str(e))
+except Exception:
+  print(traceback.format_exc())
 finally:
   driver.quit()
 
